@@ -1,0 +1,119 @@
+module LittlePrince
+
+%default covering
+
+-- Type sketch for the Lua game layer / C geometry boundary.
+-- This is intentionally a design sketch, not the implementation language.
+
+record Metres where
+  constructor M
+  value : Float
+
+record Radians where
+  constructor Rad
+  value : Float
+
+record Seconds where
+  constructor Sec
+  value : Float
+
+record Vec3 where
+  constructor V3
+  x : Float
+  y : Float
+  z : Float
+
+-- The C core maintains these geometric invariants:
+--   |up| = 1
+--   |forward| = 1
+--   up · forward = 0
+record SurfaceFrame where
+  constructor Frame
+  up : Vec3
+  forward : Vec3
+
+record Planet where
+  constructor TinyPlanet
+  radius : Metres
+  vertical_exaggeration : Float
+
+record Walker where
+  constructor Walking
+  frame : SurfaceFrame
+  eye_height : Metres
+
+record Camera where
+  constructor ChaseCamera
+  yaw : Radians
+  pitch : Radians
+
+data RoseState = Dry | Watered
+
+record Rose (state : RoseState) where
+  constructor TheRose
+  surface_direction : Vec3
+
+data GamePhase = Exploring | ReturningHome
+
+record Game (rose : RoseState) (phase : GamePhase) where
+  constructor World
+  planet : Planet
+  prince : Walker
+  flower : Rose rose
+  camera : Camera
+
+-- Commands expose the small semantic interface that Lua should see.
+-- Version 0 has one playable phase. Riding the comet is the terminal action:
+-- switch to the fixed return-to-Earth sequence, play it, then close the app.
+data Command : RoseState → GamePhase → RoseState → GamePhase → Type where
+  Walk : Metres → Command rose Exploring rose Exploring
+  Turn : Radians → Command rose Exploring rose Exploring
+  Look : Radians → Radians → Command rose Exploring rose Exploring
+  ResetCamera : Command rose Exploring rose Exploring
+
+  WaterRose : Command Dry Exploring Watered Exploring
+  WaterAgain : Command Watered Exploring Watered Exploring
+
+  RideComet : Command rose Exploring rose ReturningHome
+
+data ExitScreen = CometRideToEarth
+
+-- The native C side should satisfy an interface of roughly this shape.
+record NativeGeometry where
+  constructor Geometry
+  walk : Walker → Metres → Walker
+  turn : Walker → Radians → Walker
+  position : Planet → Walker → Vec3
+  terrain_height : Planet → Vec3 → Metres
+
+-- Lua chooses Commands.  The engine applies them.
+-- A later executable Edriç experiment could implement this relation directly.
+apply :
+  NativeGeometry →
+  Command rose0 comet0 rose1 comet1 →
+  Game rose0 comet0 →
+  Game rose1 comet1
+apply geometry (Walk distance) game =
+  { prince := geometry.walk game.prince distance } game
+apply geometry (Turn angle) game =
+  { prince := geometry.turn game.prince angle } game
+apply geometry (Look yaw pitch) game =
+  { camera := ChaseCamera yaw pitch } game
+apply geometry ResetCamera game =
+  { camera := ChaseCamera (Rad 0.0) (Rad 0.0) } game
+apply geometry WaterRose game =
+  { flower := TheRose game.flower.surface_direction } game
+apply geometry WaterAgain game = game
+apply geometry RideComet (World planet prince flower camera) =
+  World planet prince flower camera
+
+exit_screen : Game rose ReturningHome → ExitScreen
+exit_screen _ = CometRideToEarth
+
+-- ReturningHome is deliberately terminal in version 0.  It has no movement,
+-- rose, or camera Commands.  The host plays one fixed star-flight / Earth
+-- approach screen or video and exits when playback finishes.
+
+-- One useful property to keep in mind when the sketch becomes executable:
+-- a complete lap changes position continuously while preserving a valid
+-- tangent frame; longitude and latitude never belong in the Walker type.
